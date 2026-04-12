@@ -11,8 +11,9 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from config import DEFAULT_WATCHLIST, INDICATOR_PARAMS, TIMEFRAMES, DEFAULT_TIMEFRAME, DATA_PERIOD
-from scanner import scan_watchlist, get_analysed_data
+from scanner import scan_watchlist, get_analysed_data, scan_stock
 from candle_patterns import detect_patterns, find_swing_points, classify_trend, find_support_resistance
+from backtester import run_backtest
 
 # ── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -32,7 +33,7 @@ with st.sidebar:
     st.title("Trading AI")
     st.caption("Swing Trading Signal Engine")
 
-    page = st.radio("Navigate", ["Scanner", "Stock Analysis", "Settings"], label_visibility="collapsed")
+    page = st.radio("Navigate", ["Scanner", "Stock Analysis", "Multi-Timeframe", "Backtest", "Risk Calculator", "Settings"], label_visibility="collapsed")
 
     st.divider()
     st.warning(
@@ -268,6 +269,253 @@ elif page == "Stock Analysis":
 
                 styled_pat = pat_display.style.map(color_bias, subset=["Bias"])
                 st.dataframe(styled_pat, use_container_width=True)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PAGE: Multi-Timeframe
+# ═══════════════════════════════════════════════════════════════════════════════
+elif page == "Multi-Timeframe":
+    st.header("Multi-Timeframe Analysis")
+    st.write("When multiple timeframes agree, the signal is much stronger.")
+
+    ticker_mt = st.text_input("Ticker symbol", value="AAPL", key="mt_ticker").upper().strip()
+
+    if st.button("Analyse All Timeframes", type="primary") or ticker_mt:
+        tf_list = {"1 Hour": "1h", "4 Hours": "4h", "1 Day": "1d", "1 Week": "1wk"}
+        period_map = {"1h": "1mo", "4h": "3mo", "1d": "6mo", "1wk": "2y"}
+
+        results_mt = []
+        with st.spinner(f"Scanning {ticker_mt} across all timeframes..."):
+            for tf_name, tf_val in tf_list.items():
+                try:
+                    r = scan_stock(ticker_mt, params=st.session_state.params, period=period_map[tf_val], interval=tf_val)
+                    r["timeframe"] = tf_name
+                    results_mt.append(r)
+                except Exception:
+                    results_mt.append({"timeframe": tf_name, "signal": "N/A", "strength": 0})
+
+        if results_mt:
+            # Summary grid
+            cols = st.columns(len(results_mt))
+            buy_count = 0
+            sell_count = 0
+            for i, r in enumerate(results_mt):
+                sig = r.get("signal", "N/A")
+                with cols[i]:
+                    if "BUY" in str(sig):
+                        st.success(f"**{r['timeframe']}**")
+                        buy_count += 1
+                    elif "SELL" in str(sig):
+                        st.error(f"**{r['timeframe']}**")
+                        sell_count += 1
+                    elif "BULLISH" in str(sig):
+                        st.success(f"**{r['timeframe']}**")
+                        buy_count += 1
+                    elif "BEARISH" in str(sig):
+                        st.error(f"**{r['timeframe']}**")
+                        sell_count += 1
+                    else:
+                        st.info(f"**{r['timeframe']}**")
+                    st.metric("Signal", sig)
+                    st.metric("RSI", r.get("rsi", "–"))
+                    st.metric("EMA", r.get("ema_trend", "–"))
+                    st.metric("MACD", r.get("macd_trend", "–"))
+
+            # Overall verdict
+            st.divider()
+            total = len(results_mt)
+            if buy_count >= 3:
+                st.success(f"### STRONG BUY — {buy_count}/{total} timeframes are bullish", icon="🟢")
+            elif buy_count >= 2:
+                st.success(f"### BUY — {buy_count}/{total} timeframes are bullish", icon="🟢")
+            elif sell_count >= 3:
+                st.error(f"### STRONG SELL — {sell_count}/{total} timeframes are bearish", icon="🔴")
+            elif sell_count >= 2:
+                st.error(f"### SELL — {sell_count}/{total} timeframes are bearish", icon="🔴")
+            else:
+                st.warning(f"### MIXED — no clear consensus across timeframes. Wait for confirmation.", icon="⚠️")
+
+            # Detail table
+            st.subheader("Detailed View")
+            mt_df = pd.DataFrame(results_mt)
+            display = [c for c in ["timeframe", "signal", "strength", "rsi", "ema_trend", "macd_trend", "volume", "close"] if c in mt_df.columns]
+            st.dataframe(mt_df[display], use_container_width=True)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PAGE: Backtest
+# ═══════════════════════════════════════════════════════════════════════════════
+elif page == "Backtest":
+    st.header("Strategy Backtester")
+    st.write("Test how the signal strategy would have performed in the past.")
+
+    col_bt1, col_bt2, col_bt3 = st.columns(3)
+    with col_bt1:
+        bt_ticker = st.text_input("Ticker", value="AAPL", key="bt_ticker").upper().strip()
+    with col_bt2:
+        bt_period = st.selectbox("History", ["6mo", "1y", "2y", "5y"], index=2)
+    with col_bt3:
+        bt_capital = st.number_input("Starting Capital ($)", value=10000, min_value=1000, step=1000)
+
+    col_bt4, col_bt5 = st.columns(2)
+    with col_bt4:
+        bt_risk = st.slider("Risk per trade (%)", 1.0, 10.0, 2.0, 0.5) / 100
+    with col_bt5:
+        bt_min_sig = st.slider("Min signals to trigger (lower = more trades)", 2, 4, 2)
+
+    if st.button("Run Backtest", type="primary"):
+        bt_params = st.session_state.params.copy()
+        bt_params["min_signals"] = bt_min_sig
+        with st.spinner(f"Backtesting {bt_ticker} over {bt_period}..."):
+            result = run_backtest(bt_ticker, params=bt_params, period=bt_period, initial_capital=bt_capital, risk_per_trade=bt_risk)
+
+        stats = result["stats"]
+        trades = result["trades"]
+        equity = result["equity_curve"]
+
+        if not trades:
+            st.warning("No trades were triggered in this period. Try a longer period or adjust settings.")
+        else:
+            # Key metrics
+            st.subheader("Performance Summary")
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Total Trades", stats["total_trades"])
+            m2.metric("Win Rate", f"{stats['win_rate']}%")
+            m3.metric("Total Return", f"{stats['total_return_pct']}%",
+                       delta=f"${stats['total_pnl']}")
+            m4.metric("Max Drawdown", f"{stats['max_drawdown_pct']}%")
+
+            m5, m6, m7, m8 = st.columns(4)
+            m5.metric("Winning Trades", stats["winning_trades"])
+            m6.metric("Losing Trades", stats["losing_trades"])
+            m7.metric("Profit Factor", stats["profit_factor"])
+            m8.metric("Avg Win / Loss", f"${stats['avg_win']} / ${stats['avg_loss']}")
+
+            # Equity curve
+            st.subheader("Equity Curve")
+            if not equity.empty:
+                fig_eq = go.Figure()
+                fig_eq.add_trace(go.Scatter(x=equity.index, y=equity["equity"], fill="tozeroy",
+                                            line=dict(color="dodgerblue", width=2), name="Portfolio Value"))
+                fig_eq.add_hline(y=bt_capital, line_dash="dash", line_color="gray",
+                                 annotation_text=f"Starting: ${bt_capital:,.0f}")
+                fig_eq.update_layout(height=400, template="plotly_dark",
+                                     yaxis_title="Portfolio Value ($)", xaxis_title="Date",
+                                     margin=dict(l=50, r=20, t=30, b=30))
+                st.plotly_chart(fig_eq, use_container_width=True)
+
+            # Trade log
+            st.subheader("Trade Log")
+            trades_df = pd.DataFrame(trades)
+
+            def color_pnl(val):
+                try:
+                    v = float(val)
+                    if v > 0:
+                        return "background-color: #1b5e20; color: white"
+                    elif v < 0:
+                        return "background-color: #b71c1c; color: white"
+                except (ValueError, TypeError):
+                    pass
+                return ""
+
+            styled_trades = trades_df.style.map(color_pnl, subset=["pnl", "pnl_pct"])
+            st.dataframe(styled_trades, use_container_width=True)
+
+            # Win/Loss chart
+            st.subheader("Wins vs Losses")
+            pnl_colors = ["green" if p > 0 else "red" for p in trades_df["pnl"]]
+            fig_pnl = go.Figure(go.Bar(
+                x=list(range(1, len(trades_df) + 1)),
+                y=trades_df["pnl"],
+                marker_color=pnl_colors,
+                name="P&L"
+            ))
+            fig_pnl.update_layout(height=300, template="plotly_dark",
+                                   xaxis_title="Trade #", yaxis_title="Profit/Loss ($)",
+                                   margin=dict(l=50, r=20, t=30, b=30))
+            st.plotly_chart(fig_pnl, use_container_width=True)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PAGE: Risk Calculator
+# ═══════════════════════════════════════════════════════════════════════════════
+elif page == "Risk Calculator":
+    st.header("Position Size & Risk Calculator")
+    st.write("Calculate how many shares to buy based on your risk tolerance.")
+
+    col_r1, col_r2 = st.columns(2)
+    with col_r1:
+        account_balance = st.number_input("Account Balance ($)", value=10000.0, min_value=100.0, step=500.0)
+        risk_pct = st.slider("Risk per Trade (%)", 0.5, 10.0, 2.0, 0.5)
+        entry_price = st.number_input("Entry Price ($)", value=150.0, min_value=0.01, step=1.0)
+
+    with col_r2:
+        sl_type = st.radio("Stop Loss Method", ["ATR-based (auto)", "Fixed price", "Fixed %"])
+        if sl_type == "ATR-based (auto)":
+            atr_val = st.number_input("ATR Value ($)", value=3.0, min_value=0.01, step=0.5)
+            atr_mult = st.slider("ATR Multiplier", 0.5, 5.0, 1.5, 0.1)
+            stop_loss = entry_price - (atr_val * atr_mult)
+        elif sl_type == "Fixed price":
+            stop_loss = st.number_input("Stop Loss Price ($)", value=145.0, min_value=0.01, step=1.0)
+        else:
+            sl_pct = st.slider("Stop Loss %", 0.5, 15.0, 3.0, 0.5)
+            stop_loss = entry_price * (1 - sl_pct / 100)
+
+    tp_ratio = st.slider("Risk:Reward Ratio", 1.0, 5.0, 2.0, 0.5)
+
+    # Calculations
+    risk_amount = account_balance * (risk_pct / 100)
+    risk_per_share = abs(entry_price - stop_loss)
+    take_profit = entry_price + (risk_per_share * tp_ratio)
+
+    if risk_per_share > 0:
+        position_size = int(risk_amount / risk_per_share)
+        total_cost = position_size * entry_price
+        potential_loss = position_size * risk_per_share
+        potential_profit = position_size * (take_profit - entry_price)
+    else:
+        position_size = 0
+        total_cost = 0
+        potential_loss = 0
+        potential_profit = 0
+
+    st.divider()
+    st.subheader("Results")
+
+    r1, r2, r3, r4 = st.columns(4)
+    r1.metric("Shares to Buy", f"{position_size}")
+    r2.metric("Total Cost", f"${total_cost:,.2f}")
+    r3.metric("Stop Loss", f"${stop_loss:.2f}")
+    r4.metric("Take Profit", f"${take_profit:.2f}")
+
+    p1, p2, p3, p4 = st.columns(4)
+    p1.metric("Risk Amount", f"${risk_amount:,.2f}")
+    p2.metric("Max Loss", f"-${potential_loss:,.2f}")
+    p3.metric("Max Profit", f"+${potential_profit:,.2f}")
+    p4.metric("R:R Ratio", f"1:{tp_ratio}")
+
+    # Visual risk bar
+    if total_cost > 0:
+        risk_of_account = (potential_loss / account_balance) * 100
+        st.progress(min(risk_of_account / 10, 1.0), text=f"Using {total_cost/account_balance*100:.1f}% of account | Risking {risk_of_account:.1f}% of account")
+
+        if risk_of_account > 5:
+            st.error("High risk! Consider reducing position size or widening your stop loss.")
+        elif risk_of_account > 3:
+            st.warning("Moderate risk. Acceptable for swing trading.")
+        else:
+            st.success("Conservative risk. Good risk management.")
+
+    # Quick lookup from current stock data
+    st.divider()
+    st.subheader("Quick Lookup")
+    ql_ticker = st.text_input("Enter a ticker to auto-fill values", value="", key="ql_ticker").upper().strip()
+    if ql_ticker and st.button("Fetch Data"):
+        with st.spinner(f"Fetching {ql_ticker}..."):
+            r = scan_stock(ql_ticker, params=st.session_state.params)
+        if r.get("close"):
+            st.info(f"**{ql_ticker}** — Price: ${r['close']} | ATR: ${r.get('atr', 'N/A')} | "
+                    f"Stop Loss (buy): ${r.get('sl_buy', 'N/A')} | Take Profit: ${r.get('tp_buy', 'N/A')}")
+        else:
+            st.error(f"Could not fetch data for {ql_ticker}")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # PAGE: Settings
