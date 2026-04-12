@@ -1,0 +1,369 @@
+// This Pine Script™ source code is subject to the terms of the Mozilla Public License 2.0
+//@version=6
+indicator("Candle Patterns & S/R v3", overlay=true, max_lines_count=100, max_labels_count=200, max_boxes_count=200)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INPUTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+swingLen   = input.int(5,     "Swing Lookback",        minval=2, maxval=20,  group="S/R Settings")
+maxSR      = input.int(4,     "Max S/R Zones",         minval=1, maxval=8,   group="S/R Settings")
+srZoneMult = input.float(0.3, "Zone Width (ATR×)",     minval=0.1, maxval=2.0, step=0.1, group="S/R Settings")
+showTrend  = input.bool(true, "Show Trend Lines",      group="S/R Settings")
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// HELPERS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+bodySize   = math.abs(close - open)
+upperWick  = high - math.max(close, open)
+lowerWick  = math.min(close, open) - low
+totalRange = high - low
+isBullish  = close > open
+isBearish  = close < open
+atr        = ta.atr(14)
+
+pO = open[1],  pH = high[1],  pL = low[1],  pC = close[1]
+pBody   = math.abs(pC - pO)
+pRange  = pH - pL
+pBull   = pC > pO
+pBear   = pC < pO
+
+o2 = open[2], h2 = high[2], l2 = low[2], c2 = close[2]
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PATTERN DETECTION
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Single bar
+hammer       = lowerWick >= bodySize * 2 and upperWick <= bodySize * 0.5 and totalRange > atr * 0.4
+invHammer    = upperWick >= bodySize * 2 and lowerWick <= bodySize * 0.5 and totalRange > atr * 0.4 and isBullish
+shootingStar = upperWick >= bodySize * 2 and lowerWick <= bodySize * 0.5 and totalRange > atr * 0.4 and isBearish
+doji         = bodySize <= totalRange * 0.1 and totalRange > atr * 0.25
+bullPin      = lowerWick >= totalRange * 0.6 and bodySize <= totalRange * 0.3
+bearPin      = upperWick >= totalRange * 0.6 and bodySize <= totalRange * 0.3
+
+// Two bar
+bullEngulf   = pBear and isBullish and close > pO and open <= pC and bodySize > pBody
+bearEngulf   = pBull and isBearish and close < pO and open >= pC and bodySize > pBody
+bullHarami   = pBear and isBullish and open > pC and close < pO and bodySize < pBody * 0.6
+bearHarami   = pBull and isBearish and open < pC and close > pO and bodySize < pBody * 0.6
+tweezerTop   = pBull and isBearish and math.abs(high - pH) <= atr * 0.05 and bodySize > totalRange * 0.3
+tweezerBot   = pBear and isBullish and math.abs(low - pL) <= atr * 0.05 and bodySize > totalRange * 0.3
+darkCloud    = pBull and isBearish and open > pH and close < (pO + pC) / 2 and close > pO
+piercing     = pBear and isBullish and open < pL and close > (pO + pC) / 2 and close < pO
+
+// Three bar
+body1 = math.abs(close[1] - open[1])
+range1 = high[1] - low[1]
+mornStar   = c2 < o2 and body1 < range1 * 0.3 and isBullish and close > (o2 + c2) / 2
+eveStar    = c2 > o2 and body1 < range1 * 0.3 and isBearish and close < (o2 + c2) / 2
+threeSold  = close > pC and pC > c2 and isBullish and pBull and c2 > o2 and bodySize > totalRange * 0.4
+threeCrows = close < pC and pC < c2 and isBearish and pBear and c2 < o2 and bodySize > totalRange * 0.4
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CONTEXT FILTERS — only show signals when trend + indicators confirm
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// EMAs for trend context
+ema20  = ta.ema(close, 20)
+ema50  = ta.ema(close, 50)
+ema200 = ta.ema(close, 200)
+
+// RSI for momentum
+rsi = ta.rsi(close, 14)
+
+// Trend filters
+emaBull   = ema20 > ema50                   // short-term uptrend
+emaBear   = ema20 < ema50                   // short-term downtrend
+aboveEma  = close > ema50                   // price above trend
+belowEma  = close < ema50                   // price below trend
+rsiNotOB  = rsi < 70                        // not overbought
+rsiNotOS  = rsi > 30                        // not oversold
+
+// BUY confirmed = pattern + bullish context (at least 2 of: EMA bull, price above EMA50, RSI not overbought)
+bullContext = (emaBull ? 1 : 0) + (aboveEma ? 1 : 0) + (rsiNotOB ? 1 : 0) >= 2
+// SELL confirmed = pattern + bearish context
+bearContext = (emaBear ? 1 : 0) + (belowEma ? 1 : 0) + (rsiNotOS ? 1 : 0) >= 2
+
+// Raw pattern groups
+rawBull1 = hammer or invHammer or bullPin
+rawBear1 = shootingStar or bearPin
+rawBull2 = bullEngulf or bullHarami or tweezerBot or piercing
+rawBear2 = bearEngulf or bearHarami or tweezerTop or darkCloud
+rawBull3 = mornStar or threeSold
+rawBear3 = eveStar or threeCrows
+
+// Filtered signals — pattern MUST align with context
+confBull1 = rawBull1 and bullContext
+confBear1 = rawBear1 and bearContext
+confBull2 = rawBull2 and bullContext
+confBear2 = rawBear2 and bearContext
+confBull3 = rawBull3 and bullContext
+confBear3 = rawBear3 and bearContext
+
+anyBull = confBull1 or confBull2 or confBull3
+anyBear = confBear1 or confBear2 or confBear3
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DRAW BOXES + BUY/SELL LABELS (only confirmed signals)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+greenBorder = color.new(#00e676, 0)
+redBorder   = color.new(#ff1744, 0)
+greenBg     = color.new(#00e676, 80)
+redBg       = color.new(#ff1744, 80)
+greenLabel  = color.new(#00c853, 0)
+redLabel    = color.new(#ff1744, 0)
+grayBorder  = color.new(color.gray, 30)
+grayBg      = color.new(color.gray, 88)
+grayLabel   = color.new(color.gray, 20)
+
+// ── Single-bar CONFIRMED bullish ──
+if hammer and bullContext
+    box.new(bar_index, high + atr * 0.1, bar_index, low - atr * 0.1, greenBorder, 2, bgcolor=greenBg)
+    label.new(bar_index, low - atr * 0.5, "BUY\nHammer", style=label.style_label_up, color=greenLabel, textcolor=color.white, size=size.normal)
+
+if invHammer and bullContext
+    box.new(bar_index, high + atr * 0.1, bar_index, low - atr * 0.1, greenBorder, 2, bgcolor=greenBg)
+    label.new(bar_index, low - atr * 0.5, "BUY\nInv Hammer", style=label.style_label_up, color=greenLabel, textcolor=color.white, size=size.normal)
+
+if bullPin and not hammer and not invHammer and bullContext
+    box.new(bar_index, high + atr * 0.1, bar_index, low - atr * 0.1, greenBorder, 2, bgcolor=greenBg)
+    label.new(bar_index, low - atr * 0.5, "BUY\nPin Bar", style=label.style_label_up, color=greenLabel, textcolor=color.white, size=size.normal)
+
+// ── Single-bar CONFIRMED bearish ──
+if shootingStar and bearContext
+    box.new(bar_index, high + atr * 0.1, bar_index, low - atr * 0.1, redBorder, 2, bgcolor=redBg)
+    label.new(bar_index, high + atr * 0.5, "SELL\nShooting Star", style=label.style_label_down, color=redLabel, textcolor=color.white, size=size.normal)
+
+if bearPin and not shootingStar and bearContext
+    box.new(bar_index, high + atr * 0.1, bar_index, low - atr * 0.1, redBorder, 2, bgcolor=redBg)
+    label.new(bar_index, high + atr * 0.5, "SELL\nPin Bar", style=label.style_label_down, color=redLabel, textcolor=color.white, size=size.normal)
+
+// ── Unconfirmed patterns shown as gray (weak signal) ──
+if (rawBull1 and not bullContext)
+    box.new(bar_index, high + atr * 0.1, bar_index, low - atr * 0.1, grayBorder, 1, bgcolor=grayBg)
+    label.new(bar_index, low - atr * 0.3, "WEAK", style=label.style_label_up, color=grayLabel, textcolor=color.white, size=size.tiny)
+
+if (rawBear1 and not bearContext)
+    box.new(bar_index, high + atr * 0.1, bar_index, low - atr * 0.1, grayBorder, 1, bgcolor=grayBg)
+    label.new(bar_index, high + atr * 0.3, "WEAK", style=label.style_label_down, color=grayLabel, textcolor=color.white, size=size.tiny)
+
+// ── Two-bar CONFIRMED bullish ──
+if bullEngulf and bullContext
+    box.new(bar_index - 1, math.max(high, pH) + atr * 0.1, bar_index, math.min(low, pL) - atr * 0.1, greenBorder, 2, bgcolor=greenBg)
+    label.new(bar_index, math.min(low, pL) - atr * 0.5, "BUY\nEngulfing", style=label.style_label_up, color=greenLabel, textcolor=color.white, size=size.normal)
+
+if bullHarami and bullContext
+    box.new(bar_index - 1, math.max(high, pH) + atr * 0.1, bar_index, math.min(low, pL) - atr * 0.1, greenBorder, 2, bgcolor=greenBg)
+    label.new(bar_index, math.min(low, pL) - atr * 0.5, "BUY\nHarami", style=label.style_label_up, color=greenLabel, textcolor=color.white, size=size.normal)
+
+if tweezerBot and bullContext
+    box.new(bar_index - 1, math.max(high, pH) + atr * 0.1, bar_index, math.min(low, pL) - atr * 0.1, greenBorder, 2, bgcolor=greenBg)
+    label.new(bar_index, math.min(low, pL) - atr * 0.5, "BUY\nTweezer Bot", style=label.style_label_up, color=greenLabel, textcolor=color.white, size=size.normal)
+
+if piercing and bullContext
+    box.new(bar_index - 1, math.max(high, pH) + atr * 0.1, bar_index, math.min(low, pL) - atr * 0.1, greenBorder, 2, bgcolor=greenBg)
+    label.new(bar_index, math.min(low, pL) - atr * 0.5, "BUY\nPiercing", style=label.style_label_up, color=greenLabel, textcolor=color.white, size=size.normal)
+
+// ── Two-bar CONFIRMED bearish ──
+if bearEngulf and bearContext
+    box.new(bar_index - 1, math.max(high, pH) + atr * 0.1, bar_index, math.min(low, pL) - atr * 0.1, redBorder, 2, bgcolor=redBg)
+    label.new(bar_index, math.max(high, pH) + atr * 0.5, "SELL\nEngulfing", style=label.style_label_down, color=redLabel, textcolor=color.white, size=size.normal)
+
+if bearHarami and bearContext
+    box.new(bar_index - 1, math.max(high, pH) + atr * 0.1, bar_index, math.min(low, pL) - atr * 0.1, redBorder, 2, bgcolor=redBg)
+    label.new(bar_index, math.max(high, pH) + atr * 0.5, "SELL\nHarami", style=label.style_label_down, color=redLabel, textcolor=color.white, size=size.normal)
+
+if tweezerTop and bearContext
+    box.new(bar_index - 1, math.max(high, pH) + atr * 0.1, bar_index, math.min(low, pL) - atr * 0.1, redBorder, 2, bgcolor=redBg)
+    label.new(bar_index, math.max(high, pH) + atr * 0.5, "SELL\nTweezer Top", style=label.style_label_down, color=redLabel, textcolor=color.white, size=size.normal)
+
+if darkCloud and bearContext
+    box.new(bar_index - 1, math.max(high, pH) + atr * 0.1, bar_index, math.min(low, pL) - atr * 0.1, redBorder, 2, bgcolor=redBg)
+    label.new(bar_index, math.max(high, pH) + atr * 0.5, "SELL\nDark Cloud", style=label.style_label_down, color=redLabel, textcolor=color.white, size=size.normal)
+
+// ── Two-bar unconfirmed (gray) ──
+if (rawBull2 and not bullContext)
+    box.new(bar_index - 1, math.max(high, pH) + atr * 0.05, bar_index, math.min(low, pL) - atr * 0.05, grayBorder, 1, bgcolor=grayBg)
+    label.new(bar_index, math.min(low, pL) - atr * 0.2, "WEAK", style=label.style_label_up, color=grayLabel, textcolor=color.white, size=size.tiny)
+
+if (rawBear2 and not bearContext)
+    box.new(bar_index - 1, math.max(high, pH) + atr * 0.05, bar_index, math.min(low, pL) - atr * 0.05, grayBorder, 1, bgcolor=grayBg)
+    label.new(bar_index, math.max(high, pH) + atr * 0.2, "WEAK", style=label.style_label_down, color=grayLabel, textcolor=color.white, size=size.tiny)
+
+// ── Three-bar CONFIRMED bullish ──
+if mornStar and bullContext
+    box.new(bar_index - 2, math.max(high, math.max(pH, h2)) + atr * 0.1, bar_index, math.min(low, math.min(pL, l2)) - atr * 0.1, greenBorder, 2, bgcolor=greenBg)
+    label.new(bar_index, math.min(low, math.min(pL, l2)) - atr * 0.5, "BUY\nMorning Star", style=label.style_label_up, color=greenLabel, textcolor=color.white, size=size.normal)
+
+if threeSold and bullContext
+    box.new(bar_index - 2, math.max(high, math.max(pH, h2)) + atr * 0.1, bar_index, math.min(low, math.min(pL, l2)) - atr * 0.1, greenBorder, 2, bgcolor=greenBg)
+    label.new(bar_index, math.min(low, math.min(pL, l2)) - atr * 0.5, "BUY\n3 Soldiers", style=label.style_label_up, color=greenLabel, textcolor=color.white, size=size.normal)
+
+// ── Three-bar CONFIRMED bearish ──
+if eveStar and bearContext
+    box.new(bar_index - 2, math.max(high, math.max(pH, h2)) + atr * 0.1, bar_index, math.min(low, math.min(pL, l2)) - atr * 0.1, redBorder, 2, bgcolor=redBg)
+    label.new(bar_index, math.max(high, math.max(pH, h2)) + atr * 0.5, "SELL\nEvening Star", style=label.style_label_down, color=redLabel, textcolor=color.white, size=size.normal)
+
+if threeCrows and bearContext
+    box.new(bar_index - 2, math.max(high, math.max(pH, h2)) + atr * 0.1, bar_index, math.min(low, math.min(pL, l2)) - atr * 0.1, redBorder, 2, bgcolor=redBg)
+    label.new(bar_index, math.max(high, math.max(pH, h2)) + atr * 0.5, "SELL\n3 Crows", style=label.style_label_down, color=redLabel, textcolor=color.white, size=size.normal)
+
+// ── Three-bar unconfirmed ──
+if (rawBull3 and not bullContext)
+    box.new(bar_index - 2, math.max(high, math.max(pH, h2)) + atr * 0.05, bar_index, math.min(low, math.min(pL, l2)) - atr * 0.05, grayBorder, 1, bgcolor=grayBg)
+    label.new(bar_index, math.min(low, math.min(pL, l2)) - atr * 0.2, "WEAK", style=label.style_label_up, color=grayLabel, textcolor=color.white, size=size.tiny)
+
+if (rawBear3 and not bearContext)
+    box.new(bar_index - 2, math.max(high, math.max(pH, h2)) + atr * 0.05, bar_index, math.min(low, math.min(pL, l2)) - atr * 0.05, grayBorder, 1, bgcolor=grayBg)
+    label.new(bar_index, math.max(high, math.max(pH, h2)) + atr * 0.2, "WEAK", style=label.style_label_down, color=grayLabel, textcolor=color.white, size=size.tiny)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SWING POINTS + TREND LINES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+pivotHi = ta.pivothigh(high, swingLen, swingLen)
+pivotLo = ta.pivotlow(low,  swingLen, swingLen)
+
+// Mark swing points
+if not na(pivotHi)
+    label.new(bar_index - swingLen, pivotHi, "◆ SH", style=label.style_label_down, color=color.new(color.red, 20), textcolor=color.white, size=size.small)
+
+if not na(pivotLo)
+    label.new(bar_index - swingLen, pivotLo, "◆ SL", style=label.style_label_up, color=color.new(color.green, 20), textcolor=color.white, size=size.small)
+
+// Store last 2 pivots for trend lines
+var int shB1 = na, var float shV1 = na, var int shB2 = na, var float shV2 = na
+var int slB1 = na, var float slV1 = na, var int slB2 = na, var float slV2 = na
+
+if not na(pivotHi)
+    shB2 := shB1, shV2 := shV1
+    shB1 := bar_index - swingLen, shV1 := pivotHi
+
+if not na(pivotLo)
+    slB2 := slB1, slV2 := slV1
+    slB1 := bar_index - swingLen, slV1 := pivotLo
+
+// Draw trend lines
+var line hiTrend = na
+var line loTrend = na
+
+if showTrend and barstate.islast
+    if not na(shB1) and not na(shB2)
+        if not na(hiTrend)
+            line.delete(hiTrend)
+        hiTrend := line.new(shB2, shV2, shB1, shV1, color=color.new(color.red, 20), width=3, extend=extend.right, style=line.style_dashed)
+
+    if not na(slB1) and not na(slB2)
+        if not na(loTrend)
+            line.delete(loTrend)
+        loTrend := line.new(slB2, slV2, slB1, slV1, color=color.new(color.green, 20), width=3, extend=extend.right, style=line.style_dashed)
+
+// Trend
+HH = not na(shV1) and not na(shV2) and shV1 > shV2
+HL = not na(slV1) and not na(slV2) and slV1 > slV2
+LH = not na(shV1) and not na(shV2) and shV1 < shV2
+LL = not na(slV1) and not na(slV2) and slV1 < slV2
+trend = HH and HL ? "UPTREND" : LH and LL ? "DOWNTREND" : "SIDEWAYS"
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SUPPORT & RESISTANCE — simple var-based approach (no array loops)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Store the last 4 swing highs and 4 swing lows using plain vars
+var float rr1 = na, var float rr2 = na, var float rr3 = na, var float rr4 = na
+var int   rb1 = na, var int   rb2 = na, var int   rb3 = na, var int   rb4 = na
+var float ss1 = na, var float ss2 = na, var float ss3 = na, var float ss4 = na
+var int   sb1 = na, var int   sb2 = na, var int   sb3 = na, var int   sb4 = na
+
+if not na(pivotHi)
+    rr4 := rr3, rb4 := rb3
+    rr3 := rr2, rb3 := rb2
+    rr2 := rr1, rb2 := rb1
+    rr1 := pivotHi, rb1 := bar_index - swingLen
+
+if not na(pivotLo)
+    ss4 := ss3, sb4 := sb3
+    ss3 := ss2, sb3 := sb2
+    ss2 := ss1, sb2 := sb1
+    ss1 := pivotLo, sb1 := bar_index - swingLen
+
+// Draw S/R zones on last bar
+var box  rBox1 = na, var box  rBox2 = na, var box  rBox3 = na, var box  rBox4 = na
+var box  sBox1 = na, var box  sBox2 = na, var box  sBox3 = na, var box  sBox4 = na
+var label rLbl1 = na, var label rLbl2 = na, var label rLbl3 = na, var label rLbl4 = na
+var label sLbl1 = na, var label sLbl2 = na, var label sLbl3 = na, var label sLbl4 = na
+
+if barstate.islast
+    half = atr * srZoneMult
+    rBorder = color.new(#ff1744, 40)
+    rBg     = color.new(#ff1744, 85)
+    rLblCol = color.new(#ff1744, 0)
+    sBorder = color.new(#00e676, 40)
+    sBg     = color.new(#00e676, 85)
+    sLblCol = color.new(#00e676, 0)
+
+    // Clean old drawings
+    box.delete(rBox1),  box.delete(rBox2),  box.delete(rBox3),  box.delete(rBox4)
+    box.delete(sBox1),  box.delete(sBox2),  box.delete(sBox3),  box.delete(sBox4)
+    label.delete(rLbl1), label.delete(rLbl2), label.delete(rLbl3), label.delete(rLbl4)
+    label.delete(sLbl1), label.delete(sLbl2), label.delete(sLbl3), label.delete(sLbl4)
+
+    // Resistance zones (swing highs)
+    if not na(rr1) and maxSR >= 1
+        rBox1 := box.new(nz(rb1, bar_index - 50), rr1 + half, bar_index + 15, rr1 - half, rBorder, 1, bgcolor=rBg)
+        rLbl1 := label.new(bar_index + 16, rr1, "RESISTANCE\n" + str.tostring(rr1, "#.##"), style=label.style_label_left, color=rLblCol, textcolor=color.white, size=size.small)
+    if not na(rr2) and maxSR >= 2
+        rBox2 := box.new(nz(rb2, bar_index - 80), rr2 + half, bar_index + 15, rr2 - half, rBorder, 1, bgcolor=rBg)
+        rLbl2 := label.new(bar_index + 16, rr2, "RESISTANCE\n" + str.tostring(rr2, "#.##"), style=label.style_label_left, color=rLblCol, textcolor=color.white, size=size.small)
+    if not na(rr3) and maxSR >= 3
+        rBox3 := box.new(nz(rb3, bar_index - 100), rr3 + half, bar_index + 15, rr3 - half, rBorder, 1, bgcolor=rBg)
+        rLbl3 := label.new(bar_index + 16, rr3, "RESISTANCE\n" + str.tostring(rr3, "#.##"), style=label.style_label_left, color=rLblCol, textcolor=color.white, size=size.small)
+    if not na(rr4) and maxSR >= 4
+        rBox4 := box.new(nz(rb4, bar_index - 120), rr4 + half, bar_index + 15, rr4 - half, rBorder, 1, bgcolor=rBg)
+        rLbl4 := label.new(bar_index + 16, rr4, "RESISTANCE\n" + str.tostring(rr4, "#.##"), style=label.style_label_left, color=rLblCol, textcolor=color.white, size=size.small)
+
+    // Support zones (swing lows)
+    if not na(ss1) and maxSR >= 1
+        sBox1 := box.new(nz(sb1, bar_index - 50), ss1 + half, bar_index + 15, ss1 - half, sBorder, 1, bgcolor=sBg)
+        sLbl1 := label.new(bar_index + 16, ss1, "SUPPORT\n" + str.tostring(ss1, "#.##"), style=label.style_label_left, color=sLblCol, textcolor=color.white, size=size.small)
+    if not na(ss2) and maxSR >= 2
+        sBox2 := box.new(nz(sb2, bar_index - 80), ss2 + half, bar_index + 15, ss2 - half, sBorder, 1, bgcolor=sBg)
+        sLbl2 := label.new(bar_index + 16, ss2, "SUPPORT\n" + str.tostring(ss2, "#.##"), style=label.style_label_left, color=sLblCol, textcolor=color.white, size=size.small)
+    if not na(ss3) and maxSR >= 3
+        sBox3 := box.new(nz(sb3, bar_index - 100), ss3 + half, bar_index + 15, ss3 - half, sBorder, 1, bgcolor=sBg)
+        sLbl3 := label.new(bar_index + 16, ss3, "SUPPORT\n" + str.tostring(ss3, "#.##"), style=label.style_label_left, color=sLblCol, textcolor=color.white, size=size.small)
+    if not na(ss4) and maxSR >= 4
+        sBox4 := box.new(nz(sb4, bar_index - 120), ss4 + half, bar_index + 15, ss4 - half, sBorder, 1, bgcolor=sBg)
+        sLbl4 := label.new(bar_index + 16, ss4, "SUPPORT\n" + str.tostring(ss4, "#.##"), style=label.style_label_left, color=sLblCol, textcolor=color.white, size=size.small)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INFO TABLE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+var table tbl = table.new(position.top_right, 2, 4, bgcolor=color.new(#1a1a2e, 0), border_color=color.gray, border_width=1)
+
+trendCol = trend == "UPTREND" ? color.green : trend == "DOWNTREND" ? color.red : color.gray
+
+if barstate.islast
+    table.cell(tbl, 0, 0, " TREND ",  text_color=color.white, text_size=size.normal)
+    table.cell(tbl, 1, 0, " " + trend + " ", text_color=color.white, text_size=size.normal, bgcolor=color.new(trendCol, 30))
+
+    structStr = (HH ? "HH" : LH ? "LH" : "—") + " / " + (HL ? "HL" : LL ? "LL" : "—")
+    table.cell(tbl, 0, 1, " Structure ",  text_color=color.gray, text_size=size.small)
+    table.cell(tbl, 1, 1, " " + structStr + " ", text_color=color.white, text_size=size.small)
+
+    table.cell(tbl, 0, 2, " Last SH ", text_color=color.gray, text_size=size.small)
+    table.cell(tbl, 1, 2, not na(shV1) ? " " + str.tostring(shV1, "#.##") + " " : " — ", text_color=color.red, text_size=size.small)
+
+    table.cell(tbl, 0, 3, " Last SL ", text_color=color.gray, text_size=size.small)
+    table.cell(tbl, 1, 3, not na(slV1) ? " " + str.tostring(slV1, "#.##") + " " : " — ", text_color=color.green, text_size=size.small)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ALERTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+alertcondition(anyBull, title="Bullish Pattern", message="BUY pattern on {{ticker}} at {{close}}")
+alertcondition(anyBear, title="Bearish Pattern", message="SELL pattern on {{ticker}} at {{close}}")

@@ -1,0 +1,161 @@
+// This Pine Script™ source code is subject to the terms of the Mozilla Public License 2.0
+// © TradingAI Swing Signal
+
+//@version=6
+indicator("Swing Trading Signal Engine", overlay=true, max_labels_count=500)
+
+// ─── DISCLAIMER ───
+// This indicator is for EDUCATIONAL purposes only. It does NOT constitute financial advice.
+// Past performance does not guarantee future results. Always do your own research.
+
+// ─── INPUTS ───
+// EMA Settings
+emaFastLen   = input.int(20,  "Fast EMA Length",   minval=5,  maxval=100, group="EMA Settings")
+emaSlowLen   = input.int(50,  "Slow EMA Length",   minval=10, maxval=200, group="EMA Settings")
+
+// RSI Settings
+rsiLen       = input.int(14,  "RSI Length",         minval=5,  maxval=50,  group="RSI Settings")
+rsiOverbought= input.int(70,  "RSI Overbought",    minval=60, maxval=90,  group="RSI Settings")
+rsiOversold  = input.int(30,  "RSI Oversold",       minval=10, maxval=40,  group="RSI Settings")
+
+// MACD Settings
+macdFast     = input.int(12,  "MACD Fast Length",   minval=5,  maxval=50,  group="MACD Settings")
+macdSlow     = input.int(26,  "MACD Slow Length",   minval=10, maxval=100, group="MACD Settings")
+macdSignal   = input.int(9,   "MACD Signal Length", minval=3,  maxval=30,  group="MACD Settings")
+
+// Volume Settings
+volMultiplier= input.float(1.5, "Volume Multiplier", minval=1.0, maxval=3.0, step=0.1, group="Volume Settings")
+volLen       = input.int(20,  "Volume MA Length",   minval=5,  maxval=50,  group="Volume Settings")
+
+// ATR Settings
+atrLen       = input.int(14,  "ATR Length",         minval=5,  maxval=50,  group="ATR / Risk Settings")
+slMultiplier = input.float(1.5, "Stop Loss ATR Multiplier", minval=0.5, maxval=5.0, step=0.1, group="ATR / Risk Settings")
+tpMultiplier = input.float(2.5, "Take Profit ATR Multiplier", minval=1.0, maxval=10.0, step=0.1, group="ATR / Risk Settings")
+
+// Display Settings
+showEMA      = input.bool(true, "Show EMAs",              group="Display")
+showSLTP     = input.bool(true, "Show Stop Loss / Take Profit", group="Display")
+showBgTrend  = input.bool(true, "Show Trend Background",  group="Display")
+minSignals   = input.int(3,    "Min Signals to Trigger (2-4)", minval=2, maxval=4, group="Display")
+
+// ─── CALCULATIONS ───
+
+// EMAs
+emaFast = ta.ema(close, emaFastLen)
+emaSlow = ta.ema(close, emaSlowLen)
+
+// RSI
+rsiVal = ta.rsi(close, rsiLen)
+
+// MACD
+[macdLine, signalLine, macdHist] = ta.macd(close, macdFast, macdSlow, macdSignal)
+
+// Volume
+volMA = ta.sma(volume, volLen)
+highVolume = volume > volMA * volMultiplier
+
+// ATR
+atrVal = ta.atr(atrLen)
+
+// ─── SIGNAL LOGIC ───
+
+// Individual BUY conditions
+emaBullCross   = ta.crossover(emaFast, emaSlow)
+emaBullish     = emaFast > emaSlow
+rsiBullSignal  = ta.crossover(rsiVal, rsiOversold) or (rsiVal > rsiOversold and rsiVal < 50 and rsiVal > rsiVal[1])
+macdBullCross  = ta.crossover(macdLine, signalLine)
+macdBullish    = macdLine > signalLine
+
+// Individual SELL conditions
+emaBearCross   = ta.crossunder(emaFast, emaSlow)
+emaBearish     = emaFast < emaSlow
+rsiBearSignal  = ta.crossunder(rsiVal, rsiOverbought) or (rsiVal < rsiOverbought and rsiVal > 50 and rsiVal < rsiVal[1])
+macdBearCross  = ta.crossunder(macdLine, signalLine)
+macdBearish    = macdLine < signalLine
+
+// Count BUY signals (crossover-based for entry timing)
+buyCount = 0
+buyCount += emaBullCross   ? 1 : 0
+buyCount += rsiBullSignal  ? 1 : 0
+buyCount += macdBullCross  ? 1 : 0
+buyCount += highVolume     ? 1 : 0
+
+// Count SELL signals
+sellCount = 0
+sellCount += emaBearCross   ? 1 : 0
+sellCount += rsiBearSignal  ? 1 : 0
+sellCount += macdBearCross  ? 1 : 0
+sellCount += highVolume     ? 1 : 0
+
+// Final signals
+buySignal  = buyCount >= minSignals
+sellSignal = sellCount >= minSignals
+
+// Signal strength
+buyStrength  = buyCount == 4 ? "STRONG BUY" : buyCount == 3 ? "BUY" : na
+sellStrength = sellCount == 4 ? "STRONG SELL" : sellCount == 3 ? "SELL" : na
+
+// ─── PLOTTING ───
+
+// EMAs
+plot(showEMA ? emaFast : na, "Fast EMA", color=color.new(color.blue, 0), linewidth=2)
+plot(showEMA ? emaSlow : na, "Slow EMA", color=color.new(color.orange, 0), linewidth=2)
+
+// Buy / Sell Arrows
+plotshape(buySignal,  title="Buy Signal",  location=location.belowbar, style=shape.triangleup,   color=color.new(color.green, 0), size=size.normal, text="BUY")
+plotshape(sellSignal, title="Sell Signal", location=location.abovebar, style=shape.triangledown, color=color.new(color.red, 0),   size=size.normal, text="SELL")
+
+// Signal strength labels
+if buySignal
+    label.new(bar_index, low, buyStrength, style=label.style_label_up, color=color.new(color.green, 20), textcolor=color.white, size=size.small)
+
+if sellSignal
+    label.new(bar_index, high, sellStrength, style=label.style_label_down, color=color.new(color.red, 20), textcolor=color.white, size=size.small)
+
+// Stop Loss / Take Profit lines
+var float slLevel = na
+var float tpLevel = na
+
+if buySignal
+    slLevel := close - atrVal * slMultiplier
+    tpLevel := close + atrVal * tpMultiplier
+
+if sellSignal
+    slLevel := close + atrVal * slMultiplier
+    tpLevel := close - atrVal * tpMultiplier
+
+plot(showSLTP and not na(slLevel) ? slLevel : na, "Stop Loss",   color=color.new(color.red, 50),   style=plot.style_linebr, linewidth=1)
+plot(showSLTP and not na(tpLevel) ? tpLevel : na, "Take Profit", color=color.new(color.green, 50), style=plot.style_linebr, linewidth=1)
+
+// Trend background
+trendColor = emaBullish ? color.new(color.green, 92) : emaBearish ? color.new(color.red, 92) : na
+bgcolor(showBgTrend ? trendColor : na, title="Trend Background")
+
+// ─── INFO TABLE ───
+var table infoTable = table.new(position.top_right, 2, 6, bgcolor=color.new(color.gray, 85), border_width=1)
+
+if barstate.islast
+    table.cell(infoTable, 0, 0, "Indicator",    text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 0, "Value",         text_color=color.white, text_size=size.small)
+
+    table.cell(infoTable, 0, 1, "EMA Trend",     text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 1, emaBullish ? "BULLISH" : "BEARISH", text_color=emaBullish ? color.green : color.red, text_size=size.small)
+
+    table.cell(infoTable, 0, 2, "RSI (" + str.tostring(rsiLen) + ")", text_color=color.white, text_size=size.small)
+    rsiColor = rsiVal > rsiOverbought ? color.red : rsiVal < rsiOversold ? color.green : color.white
+    table.cell(infoTable, 1, 2, str.tostring(rsiVal, "#.##"), text_color=rsiColor, text_size=size.small)
+
+    table.cell(infoTable, 0, 3, "MACD",          text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 3, macdLine > signalLine ? "BULLISH" : "BEARISH", text_color=macdLine > signalLine ? color.green : color.red, text_size=size.small)
+
+    table.cell(infoTable, 0, 4, "Volume",        text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 4, highVolume ? "HIGH" : "NORMAL", text_color=highVolume ? color.green : color.white, text_size=size.small)
+
+    table.cell(infoTable, 0, 5, "ATR",           text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 5, str.tostring(atrVal, "#.##"), text_color=color.white, text_size=size.small)
+
+// ─── ALERTS ───
+alertcondition(buySignal,  title="Buy Signal",  message="BUY Signal detected on {{ticker}} at {{close}}")
+alertcondition(sellSignal, title="Sell Signal", message="SELL Signal detected on {{ticker}} at {{close}}")
+alertcondition(buyCount == 4,  title="Strong Buy",  message="🟢🟢 STRONG BUY on {{ticker}} at {{close}} — all 4 indicators aligned!")
+alertcondition(sellCount == 4, title="Strong Sell", message="🔴🔴 STRONG SELL on {{ticker}} at {{close}} — all 4 indicators aligned!")
