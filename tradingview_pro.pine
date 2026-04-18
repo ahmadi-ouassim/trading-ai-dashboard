@@ -1,0 +1,420 @@
+// This Pine Script™ source code is subject to the terms of the Mozilla Public License 2.0
+//@version=6
+indicator("Trading AI PRO — Confidence Score Signals", overlay=true, max_lines_count=100, max_labels_count=200, max_boxes_count=200)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  DISCLAIMER: Educational only. NOT financial advice. DYOR.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INPUTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+grpSig       = "Signal Filtering"
+minScore     = input.int(70, "Minimum Confidence Score (0-100)", minval=40, maxval=100, step=5, group=grpSig, tooltip="Higher = fewer but more reliable signals")
+requireConf  = input.bool(true, "Require Confirmation Candle", group=grpSig, tooltip="Waits for next candle to confirm pattern direction")
+showWeak     = input.bool(false, "Show Weak Signals (Gray)", group=grpSig)
+
+grpTF        = "Higher Timeframe Bias"
+useHTF       = input.bool(true, "Use Higher Timeframe EMA Filter", group=grpTF, tooltip="Only BUY when HTF trend is up, SELL when HTF trend is down")
+htfRes       = input.timeframe("W", "Higher Timeframe", group=grpTF)
+
+grpFilters   = "Confirmation Filters"
+useADX       = input.bool(true, "Require Trend Strength (ADX)", group=grpFilters)
+adxThresh    = input.int(20, "Min ADX Level", minval=10, maxval=50, group=grpFilters)
+useVolume    = input.bool(true, "Require Volume Confirmation", group=grpFilters)
+volMultFilt  = input.float(1.2, "Min Volume (× 20MA)", minval=1.0, maxval=3.0, step=0.1, group=grpFilters)
+useRSIExt    = input.bool(true, "Avoid RSI Extremes", group=grpFilters, tooltip="No BUY when RSI > 70, no SELL when RSI < 30")
+useDiverg    = input.bool(true, "Bonus for RSI Divergence", group=grpFilters)
+
+grpSR        = "Support/Resistance"
+showSR       = input.bool(true, "Draw S/R Zones", group=grpSR)
+swingLen     = input.int(10, "Swing Lookback", minval=5, maxval=30, group=grpSR)
+srZoneMult   = input.float(0.5, "S/R Zone Width (ATR×)", minval=0.1, maxval=2.0, step=0.1, group=grpSR)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// BASE INDICATORS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// EMAs for trend
+ema9   = ta.ema(close, 9)
+ema20  = ta.ema(close, 20)
+ema50  = ta.ema(close, 50)
+ema200 = ta.ema(close, 200)
+
+// RSI
+rsiVal = ta.rsi(close, 14)
+
+// MACD
+[macdLine, sigLine, macdHist] = ta.macd(close, 12, 26, 9)
+
+// ADX
+[diPlus, diMinus, adx] = ta.dmi(14, 14)
+
+// ATR
+atr = ta.atr(14)
+
+// Volume
+volMA  = ta.sma(volume, 20)
+volOk  = volume > volMA * volMultFilt
+
+// Higher timeframe EMA
+htfEma50  = useHTF ? request.security(syminfo.tickerid, htfRes, ta.ema(close, 50),  lookahead=barmerge.lookahead_off) : ema50
+htfEma200 = useHTF ? request.security(syminfo.tickerid, htfRes, ta.ema(close, 200), lookahead=barmerge.lookahead_off) : ema200
+
+htfBullish = close > htfEma50 and htfEma50 > htfEma200
+htfBearish = close < htfEma50 and htfEma50 < htfEma200
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CANDLE PATTERNS (with confirmation candle option)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+bodySize   = math.abs(close - open)
+upperWick  = high - math.max(close, open)
+lowerWick  = math.min(close, open) - low
+totalRange = high - low
+isBull     = close > open
+isBear     = close < open
+
+pO = open[1], pH = high[1], pL = low[1], pC = close[1]
+pBody  = math.abs(pC - pO)
+pBull  = pC > pO
+pBear  = pC < pO
+
+// Bullish reversal patterns (detected on previous bar, confirmed by current close higher)
+hammer_raw       = lowerWick[1] >= pBody * 2 and upperWick[1] <= pBody * 0.5 and (high[1] - low[1]) > atr[1] * 0.5
+bullEngulf_raw   = pBull and close[2] < open[2] and pC > open[2] and pO <= close[2]
+mornStar_raw     = close[3] < open[3] and math.abs(close[2] - open[2]) < (high[2] - low[2]) * 0.3 and pBull and pC > (open[3] + close[3]) / 2
+bullPin_raw      = lowerWick[1] >= (high[1] - low[1]) * 0.6 and upperWick[1] <= (high[1] - low[1]) * 0.15
+piercing_raw     = close[2] < open[2] and pBull and pO < low[2] and pC > (open[2] + close[2]) / 2
+
+// Bearish reversal patterns
+shootStar_raw    = upperWick[1] >= pBody * 2 and lowerWick[1] <= pBody * 0.5 and (high[1] - low[1]) > atr[1] * 0.5
+bearEngulf_raw   = pBear and close[2] > open[2] and pC < open[2] and pO >= close[2]
+eveStar_raw      = close[3] > open[3] and math.abs(close[2] - open[2]) < (high[2] - low[2]) * 0.3 and pBear and pC < (open[3] + close[3]) / 2
+bearPin_raw      = upperWick[1] >= (high[1] - low[1]) * 0.6 and lowerWick[1] <= (high[1] - low[1]) * 0.15
+darkCloud_raw    = close[2] > open[2] and pBear and pO > high[2] and pC < (open[2] + close[2]) / 2
+
+// Confirmation candle: pattern bar + current bar closes in pattern direction
+bullConfirmed = requireConf ? (close > pC and isBull) : true
+bearConfirmed = requireConf ? (close < pC and isBear) : true
+
+hammer       = hammer_raw     and bullConfirmed
+bullEngulf   = bullEngulf_raw and bullConfirmed
+mornStar     = mornStar_raw   and bullConfirmed
+bullPin      = bullPin_raw    and bullConfirmed
+piercing     = piercing_raw   and bullConfirmed
+
+shootStar    = shootStar_raw  and bearConfirmed
+bearEngulf   = bearEngulf_raw and bearConfirmed
+eveStar      = eveStar_raw    and bearConfirmed
+bearPin      = bearPin_raw    and bearConfirmed
+darkCloud    = darkCloud_raw  and bearConfirmed
+
+anyBullPat = hammer or bullEngulf or mornStar or bullPin or piercing
+anyBearPat = shootStar or bearEngulf or eveStar or bearPin or darkCloud
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// RSI DIVERGENCE DETECTION
+// ═══════════════════════════════════════════════════════════════════════════════
+
+pivotHi = ta.pivothigh(high, swingLen, swingLen)
+pivotLo = ta.pivotlow(low,  swingLen, swingLen)
+rsiPivHi = ta.pivothigh(rsiVal, swingLen, swingLen)
+rsiPivLo = ta.pivotlow(rsiVal,  swingLen, swingLen)
+
+var float lastHigh1 = na, var float lastHigh2 = na
+var float lastRsiHi1 = na, var float lastRsiHi2 = na
+var float lastLow1  = na, var float lastLow2  = na
+var float lastRsiLo1 = na, var float lastRsiLo2 = na
+
+if not na(pivotHi)
+    lastHigh2 := lastHigh1
+    lastHigh1 := pivotHi
+if not na(rsiPivHi)
+    lastRsiHi2 := lastRsiHi1
+    lastRsiHi1 := rsiPivHi
+if not na(pivotLo)
+    lastLow2 := lastLow1
+    lastLow1 := pivotLo
+if not na(rsiPivLo)
+    lastRsiLo2 := lastRsiLo1
+    lastRsiLo1 := rsiPivLo
+
+// Bearish divergence: price makes higher high, RSI makes lower high
+bearDiv = not na(lastHigh1) and not na(lastHigh2) and not na(lastRsiHi1) and not na(lastRsiHi2) and lastHigh1 > lastHigh2 and lastRsiHi1 < lastRsiHi2
+
+// Bullish divergence: price makes lower low, RSI makes higher low
+bullDiv = not na(lastLow1) and not na(lastLow2) and not na(lastRsiLo1) and not na(lastRsiLo2) and lastLow1 < lastLow2 and lastRsiLo1 > lastRsiLo2
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SUPPORT & RESISTANCE ZONES (simple var-based)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+var float rr1 = na, var float rr2 = na, var float rr3 = na
+var int   rb1 = na, var int   rb2 = na, var int   rb3 = na
+var float ss1 = na, var float ss2 = na, var float ss3 = na
+var int   sb1 = na, var int   sb2 = na, var int   sb3 = na
+
+if not na(pivotHi)
+    rr3 := rr2, rb3 := rb2
+    rr2 := rr1, rb2 := rb1
+    rr1 := pivotHi, rb1 := bar_index - swingLen
+
+if not na(pivotLo)
+    ss3 := ss2, sb3 := sb2
+    ss2 := ss1, sb2 := sb1
+    ss1 := pivotLo, sb1 := bar_index - swingLen
+
+// Find nearest S/R to current price
+nearestSupp = na(ss1) ? 0.0 : ss1
+nearestRes  = na(rr1) ? 0.0 : rr1
+if not na(ss2) and ss2 < close and (na(nearestSupp) or close - ss2 < close - nearestSupp)
+    nearestSupp := ss2
+if not na(ss3) and ss3 < close and (na(nearestSupp) or close - ss3 < close - nearestSupp)
+    nearestSupp := ss3
+if not na(rr2) and rr2 > close and (na(nearestRes) or rr2 - close < nearestRes - close)
+    nearestRes := rr2
+if not na(rr3) and rr3 > close and (na(nearestRes) or rr3 - close < nearestRes - close)
+    nearestRes := rr3
+
+nearSupport    = nearestSupp > 0 and (close - nearestSupp) < atr * 1.5 and close > nearestSupp
+nearResistance = nearestRes  > 0 and (nearestRes - close) < atr * 1.5 and close < nearestRes
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CONFIDENCE SCORING (0-100)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Each factor contributes points. Score > minScore = signal fires.
+f_score(bool cond, int pts) => cond ? pts : 0
+
+// ── BUY SCORE ──
+buyScore = 0
+// Candle pattern (0-30 pts)
+buyScore += f_score(hammer,     20)
+buyScore += f_score(bullEngulf, 25)
+buyScore += f_score(mornStar,   30)
+buyScore += f_score(bullPin,    18)
+buyScore += f_score(piercing,   22)
+
+// Trend alignment (0-25 pts)
+buyScore += f_score(ema20 > ema50, 10)
+buyScore += f_score(close > ema50, 8)
+buyScore += f_score(htfBullish, 12)  // big boost if HTF confirms
+
+// Momentum (0-20 pts)
+buyScore += f_score(macdLine > sigLine, 10)
+buyScore += f_score(macdHist > macdHist[1], 5)
+buyScore += f_score(diPlus > diMinus, 5)
+
+// ADX trend strength (0-10 pts)
+buyScore += f_score(not useADX or adx > adxThresh, 10)
+
+// Volume (0-10 pts)
+buyScore += f_score(not useVolume or volOk, 10)
+
+// RSI not overbought penalty
+if useRSIExt and rsiVal > 70
+    buyScore := buyScore - 30
+if useRSIExt and rsiVal < 30
+    buyScore += 10  // oversold bounce bonus
+
+// S/R proximity bonus
+buyScore += f_score(nearSupport, 15)
+
+// Divergence bonus
+buyScore += f_score(useDiverg and bullDiv, 15)
+
+// Penalty: trading against HTF trend
+if useHTF and htfBearish
+    buyScore := buyScore - 40
+
+buyScore := math.max(0, math.min(100, buyScore))
+
+// ── SELL SCORE ──
+sellScore = 0
+sellScore += f_score(shootStar,  20)
+sellScore += f_score(bearEngulf, 25)
+sellScore += f_score(eveStar,    30)
+sellScore += f_score(bearPin,    18)
+sellScore += f_score(darkCloud,  22)
+
+sellScore += f_score(ema20 < ema50, 10)
+sellScore += f_score(close < ema50, 8)
+sellScore += f_score(htfBearish, 12)
+
+sellScore += f_score(macdLine < sigLine, 10)
+sellScore += f_score(macdHist < macdHist[1], 5)
+sellScore += f_score(diMinus > diPlus, 5)
+
+sellScore += f_score(not useADX or adx > adxThresh, 10)
+sellScore += f_score(not useVolume or volOk, 10)
+
+if useRSIExt and rsiVal < 30
+    sellScore := sellScore - 30
+if useRSIExt and rsiVal > 70
+    sellScore += 10
+
+sellScore += f_score(nearResistance, 15)
+sellScore += f_score(useDiverg and bearDiv, 15)
+
+if useHTF and htfBullish
+    sellScore := sellScore - 40
+
+sellScore := math.max(0, math.min(100, sellScore))
+
+// ── Final signals ──
+buySignal  = buyScore  >= minScore and buyScore > sellScore and anyBullPat
+sellSignal = sellScore >= minScore and sellScore > buyScore and anyBearPat
+
+// Score tier labels
+scoreTier(int s) =>
+    s >= 90 ? "A+ ELITE" : s >= 80 ? "A STRONG" : s >= 70 ? "B GOOD" : s >= 60 ? "C MODERATE" : "D WEAK"
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PLOT EMAs
+// ═══════════════════════════════════════════════════════════════════════════════
+
+plot(ema20,  "EMA 20",  color=color.new(color.blue, 0),   linewidth=1)
+plot(ema50,  "EMA 50",  color=color.new(color.orange, 0), linewidth=2)
+plot(ema200, "EMA 200", color=color.new(color.purple, 0), linewidth=2)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DRAW SIGNALS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+greenC = color.new(#00e676, 0)
+redC   = color.new(#ff1744, 0)
+
+if buySignal
+    box.new(bar_index - 1, math.max(high, pH) + atr * 0.1, bar_index, math.min(low, pL) - atr * 0.1, greenC, 3, bgcolor=color.new(#00e676, 75))
+    label.new(bar_index, math.min(low, pL) - atr * 0.5, "BUY\nScore: " + str.tostring(buyScore) + "\n" + scoreTier(buyScore), style=label.style_label_up, color=greenC, textcolor=color.white, size=size.large)
+    // Stop loss & target lines
+    slLine = low - atr * 1.5
+    tpLine = close + atr * 3.0
+    line.new(bar_index, slLine, bar_index + 10, slLine, color=color.new(color.red, 20), width=2, style=line.style_dashed, extend=extend.right)
+    line.new(bar_index, tpLine, bar_index + 10, tpLine, color=color.new(color.green, 20), width=2, style=line.style_dashed, extend=extend.right)
+    label.new(bar_index + 10, slLine, "SL " + str.tostring(slLine, "#.##"), style=label.style_label_left, color=color.new(color.red, 30), textcolor=color.white, size=size.tiny)
+    label.new(bar_index + 10, tpLine, "TP " + str.tostring(tpLine, "#.##"), style=label.style_label_left, color=color.new(color.green, 30), textcolor=color.white, size=size.tiny)
+
+if sellSignal
+    box.new(bar_index - 1, math.max(high, pH) + atr * 0.1, bar_index, math.min(low, pL) - atr * 0.1, redC, 3, bgcolor=color.new(#ff1744, 75))
+    label.new(bar_index, math.max(high, pH) + atr * 0.5, "SELL\nScore: " + str.tostring(sellScore) + "\n" + scoreTier(sellScore), style=label.style_label_down, color=redC, textcolor=color.white, size=size.large)
+    slLine = high + atr * 1.5
+    tpLine = close - atr * 3.0
+    line.new(bar_index, slLine, bar_index + 10, slLine, color=color.new(color.red, 20), width=2, style=line.style_dashed, extend=extend.right)
+    line.new(bar_index, tpLine, bar_index + 10, tpLine, color=color.new(color.green, 20), width=2, style=line.style_dashed, extend=extend.right)
+
+// Weak signal indicators (small gray dots)
+if showWeak and anyBullPat and not buySignal
+    label.new(bar_index, low - atr * 0.3, "· " + str.tostring(buyScore), style=label.style_label_up, color=color.new(color.gray, 40), textcolor=color.white, size=size.tiny)
+
+if showWeak and anyBearPat and not sellSignal
+    label.new(bar_index, high + atr * 0.3, "· " + str.tostring(sellScore), style=label.style_label_down, color=color.new(color.gray, 40), textcolor=color.white, size=size.tiny)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// S/R ZONES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+var box rB1 = na, var box rB2 = na, var box rB3 = na
+var box sB1 = na, var box sB2 = na, var box sB3 = na
+var label rL1 = na, var label rL2 = na, var label rL3 = na
+var label sL1 = na, var label sL2 = na, var label sL3 = na
+
+if showSR and barstate.islast
+    half = atr * srZoneMult
+    rBorder = color.new(#ff1744, 40)
+    rBg     = color.new(#ff1744, 85)
+    sBorder = color.new(#00e676, 40)
+    sBg     = color.new(#00e676, 85)
+
+    box.delete(rB1), box.delete(rB2), box.delete(rB3)
+    box.delete(sB1), box.delete(sB2), box.delete(sB3)
+    label.delete(rL1), label.delete(rL2), label.delete(rL3)
+    label.delete(sL1), label.delete(sL2), label.delete(sL3)
+
+    if not na(rr1)
+        rB1 := box.new(nz(rb1, bar_index - 80), rr1 + half, bar_index + 15, rr1 - half, rBorder, 1, bgcolor=rBg)
+        rL1 := label.new(bar_index + 16, rr1, "R1  " + str.tostring(rr1, "#.##"), style=label.style_label_left, color=color.new(#ff1744, 0), textcolor=color.white, size=size.small)
+    if not na(rr2)
+        rB2 := box.new(nz(rb2, bar_index - 100), rr2 + half, bar_index + 15, rr2 - half, rBorder, 1, bgcolor=rBg)
+        rL2 := label.new(bar_index + 16, rr2, "R2  " + str.tostring(rr2, "#.##"), style=label.style_label_left, color=color.new(#ff1744, 0), textcolor=color.white, size=size.small)
+    if not na(rr3)
+        rB3 := box.new(nz(rb3, bar_index - 120), rr3 + half, bar_index + 15, rr3 - half, rBorder, 1, bgcolor=rBg)
+        rL3 := label.new(bar_index + 16, rr3, "R3  " + str.tostring(rr3, "#.##"), style=label.style_label_left, color=color.new(#ff1744, 0), textcolor=color.white, size=size.small)
+
+    if not na(ss1)
+        sB1 := box.new(nz(sb1, bar_index - 80), ss1 + half, bar_index + 15, ss1 - half, sBorder, 1, bgcolor=sBg)
+        sL1 := label.new(bar_index + 16, ss1, "S1  " + str.tostring(ss1, "#.##"), style=label.style_label_left, color=color.new(#00e676, 0), textcolor=color.white, size=size.small)
+    if not na(ss2)
+        sB2 := box.new(nz(sb2, bar_index - 100), ss2 + half, bar_index + 15, ss2 - half, sBorder, 1, bgcolor=sBg)
+        sL2 := label.new(bar_index + 16, ss2, "S2  " + str.tostring(ss2, "#.##"), style=label.style_label_left, color=color.new(#00e676, 0), textcolor=color.white, size=size.small)
+    if not na(ss3)
+        sB3 := box.new(nz(sb3, bar_index - 120), ss3 + half, bar_index + 15, ss3 - half, sBorder, 1, bgcolor=sBg)
+        sL3 := label.new(bar_index + 16, ss3, "S3  " + str.tostring(ss3, "#.##"), style=label.style_label_left, color=color.new(#00e676, 0), textcolor=color.white, size=size.small)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INFO DASHBOARD (Top-Right)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+var table dash = table.new(position.top_right, 2, 11, bgcolor=color.new(#0d0d1a, 5), border_color=color.new(color.gray, 50), border_width=1, frame_color=color.gray, frame_width=1)
+
+if barstate.islast
+    // Main signal
+    finalSig = buySignal ? "🟢 BUY" : sellSignal ? "🔴 SELL" : buyScore > sellScore and buyScore >= 50 ? "⚪ WATCH (buy)" : sellScore > buyScore and sellScore >= 50 ? "⚪ WATCH (sell)" : "⚫ WAIT"
+    finalCol = buySignal ? color.green : sellSignal ? color.red : color.gray
+
+    table.cell(dash, 0, 0, " SIGNAL ",  text_color=color.white, text_size=size.normal, bgcolor=color.new(color.gray, 70))
+    table.cell(dash, 1, 0, " " + finalSig + " ", text_color=color.white, text_size=size.normal, bgcolor=color.new(finalCol, 30))
+
+    displayScore = math.max(buyScore, sellScore)
+    table.cell(dash, 0, 1, " Confidence ", text_color=color.gray, text_size=size.small)
+    scoreCol = displayScore >= 80 ? color.green : displayScore >= 60 ? color.yellow : color.red
+    table.cell(dash, 1, 1, " " + str.tostring(displayScore) + "/100 ", text_color=scoreCol, text_size=size.small, bgcolor=color.new(scoreCol, 85))
+
+    table.cell(dash, 0, 2, " Buy / Sell Score ", text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 2, " " + str.tostring(buyScore) + " / " + str.tostring(sellScore) + " ", text_color=color.white, text_size=size.small)
+
+    // Context
+    table.cell(dash, 0, 3, " HTF Trend ", text_color=color.gray, text_size=size.small)
+    htfStr = htfBullish ? "BULL ↑" : htfBearish ? "BEAR ↓" : "NEUTRAL"
+    htfC = htfBullish ? color.green : htfBearish ? color.red : color.gray
+    table.cell(dash, 1, 3, " " + htfStr + " ", text_color=htfC, text_size=size.small)
+
+    table.cell(dash, 0, 4, " Local Trend ", text_color=color.gray, text_size=size.small)
+    localStr = ema20 > ema50 ? "Up" : "Down"
+    table.cell(dash, 1, 4, " " + localStr + " ", text_color=ema20 > ema50 ? color.green : color.red, text_size=size.small)
+
+    table.cell(dash, 0, 5, " ADX ", text_color=color.gray, text_size=size.small)
+    adxStr = str.tostring(adx, "#") + (adx > adxThresh ? " ✓" : " weak")
+    table.cell(dash, 1, 5, " " + adxStr + " ", text_color=adx > adxThresh ? color.green : color.gray, text_size=size.small)
+
+    table.cell(dash, 0, 6, " RSI ", text_color=color.gray, text_size=size.small)
+    rsiC = rsiVal > 70 ? color.red : rsiVal < 30 ? color.green : color.white
+    table.cell(dash, 1, 6, " " + str.tostring(rsiVal, "#.#") + " ", text_color=rsiC, text_size=size.small)
+
+    table.cell(dash, 0, 7, " MACD ", text_color=color.gray, text_size=size.small)
+    macdStr = macdLine > sigLine ? "Bull" : "Bear"
+    table.cell(dash, 1, 7, " " + macdStr + " ", text_color=macdLine > sigLine ? color.green : color.red, text_size=size.small)
+
+    table.cell(dash, 0, 8, " Volume ", text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 8, " " + (volOk ? "HIGH ✓" : "Low") + " ", text_color=volOk ? color.green : color.gray, text_size=size.small)
+
+    table.cell(dash, 0, 9, " Divergence ", text_color=color.gray, text_size=size.small)
+    divStr = bullDiv ? "BULL ✓" : bearDiv ? "BEAR ✓" : "None"
+    divC = bullDiv ? color.green : bearDiv ? color.red : color.gray
+    table.cell(dash, 1, 9, " " + divStr + " ", text_color=divC, text_size=size.small)
+
+    table.cell(dash, 0, 10, " Near S/R ", text_color=color.gray, text_size=size.small)
+    srStr = nearSupport ? "SUPPORT" : nearResistance ? "RESISTANCE" : "–"
+    srC = nearSupport ? color.green : nearResistance ? color.red : color.gray
+    table.cell(dash, 1, 10, " " + srStr + " ", text_color=srC, text_size=size.small)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ALERTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+alertcondition(buySignal,  title="BUY Signal",  message="🟢 BUY on {{ticker}} at {{close}} — high confidence signal")
+alertcondition(sellSignal, title="SELL Signal", message="🔴 SELL on {{ticker}} at {{close}} — high confidence signal")
+alertcondition(buyScore >= 90, title="Elite BUY",  message="🟢🟢 ELITE BUY on {{ticker}} at {{close}} — score 90+")
+alertcondition(sellScore >= 90, title="Elite SELL", message="🔴🔴 ELITE SELL on {{ticker}} at {{close}} — score 90+")
