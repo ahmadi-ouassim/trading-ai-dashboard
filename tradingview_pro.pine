@@ -226,33 +226,78 @@ resB := na, resBB := na
 supA := na, supAB := na
 supB := na, supBB := na
 
-// helper: check each stored pivot vs price to find nearest above/below
-checkRes(float p, int b) =>
-    if not na(p) and p > close
-        if na(resA) or (p - close) < (resA - close)
-            resB := resA, resBB := resAB
-            resA := p, resAB := b
-        else if na(resB) or (p - close) < (resB - close)
-            resB := p, resBB := b
+// Inline resistance scan (Pine v6 forbids mutating globals inside user functions)
+// Resistance 1
+if not na(pivHi1) and pivHi1 > close
+    if na(resA) or (pivHi1 - close) < (resA - close)
+        resB := resA, resBB := resAB
+        resA := pivHi1, resAB := pivHiB1
+    else if na(resB) or (pivHi1 - close) < (resB - close)
+        resB := pivHi1, resBB := pivHiB1
+// Resistance 2
+if not na(pivHi2) and pivHi2 > close
+    if na(resA) or (pivHi2 - close) < (resA - close)
+        resB := resA, resBB := resAB
+        resA := pivHi2, resAB := pivHiB2
+    else if na(resB) or (pivHi2 - close) < (resB - close)
+        resB := pivHi2, resBB := pivHiB2
+// Resistance 3
+if not na(pivHi3) and pivHi3 > close
+    if na(resA) or (pivHi3 - close) < (resA - close)
+        resB := resA, resBB := resAB
+        resA := pivHi3, resAB := pivHiB3
+    else if na(resB) or (pivHi3 - close) < (resB - close)
+        resB := pivHi3, resBB := pivHiB3
+// Resistance 4
+if not na(pivHi4) and pivHi4 > close
+    if na(resA) or (pivHi4 - close) < (resA - close)
+        resB := resA, resBB := resAB
+        resA := pivHi4, resAB := pivHiB4
+    else if na(resB) or (pivHi4 - close) < (resB - close)
+        resB := pivHi4, resBB := pivHiB4
+// Resistance 5
+if not na(pivHi5) and pivHi5 > close
+    if na(resA) or (pivHi5 - close) < (resA - close)
+        resB := resA, resBB := resAB
+        resA := pivHi5, resAB := pivHiB5
+    else if na(resB) or (pivHi5 - close) < (resB - close)
+        resB := pivHi5, resBB := pivHiB5
 
-checkSup(float p, int b) =>
-    if not na(p) and p < close
-        if na(supA) or (close - p) < (close - supA)
-            supB := supA, supBB := supAB
-            supA := p, supAB := b
-        else if na(supB) or (close - p) < (close - supB)
-            supB := p, supBB := b
-
-checkRes(pivHi1, pivHiB1)
-checkRes(pivHi2, pivHiB2)
-checkRes(pivHi3, pivHiB3)
-checkRes(pivHi4, pivHiB4)
-checkRes(pivHi5, pivHiB5)
-checkSup(pivLo1, pivLoB1)
-checkSup(pivLo2, pivLoB2)
-checkSup(pivLo3, pivLoB3)
-checkSup(pivLo4, pivLoB4)
-checkSup(pivLo5, pivLoB5)
+// Support 1
+if not na(pivLo1) and pivLo1 < close
+    if na(supA) or (close - pivLo1) < (close - supA)
+        supB := supA, supBB := supAB
+        supA := pivLo1, supAB := pivLoB1
+    else if na(supB) or (close - pivLo1) < (close - supB)
+        supB := pivLo1, supBB := pivLoB1
+// Support 2
+if not na(pivLo2) and pivLo2 < close
+    if na(supA) or (close - pivLo2) < (close - supA)
+        supB := supA, supBB := supAB
+        supA := pivLo2, supAB := pivLoB2
+    else if na(supB) or (close - pivLo2) < (close - supB)
+        supB := pivLo2, supBB := pivLoB2
+// Support 3
+if not na(pivLo3) and pivLo3 < close
+    if na(supA) or (close - pivLo3) < (close - supA)
+        supB := supA, supBB := supAB
+        supA := pivLo3, supAB := pivLoB3
+    else if na(supB) or (close - pivLo3) < (close - supB)
+        supB := pivLo3, supBB := pivLoB3
+// Support 4
+if not na(pivLo4) and pivLo4 < close
+    if na(supA) or (close - pivLo4) < (close - supA)
+        supB := supA, supBB := supAB
+        supA := pivLo4, supAB := pivLoB4
+    else if na(supB) or (close - pivLo4) < (close - supB)
+        supB := pivLo4, supBB := pivLoB4
+// Support 5
+if not na(pivLo5) and pivLo5 < close
+    if na(supA) or (close - pivLo5) < (close - supA)
+        supB := supA, supBB := supAB
+        supA := pivLo5, supAB := pivLoB5
+    else if na(supB) or (close - pivLo5) < (close - supB)
+        supB := pivLo5, supBB := pivLoB5
 
 nearSupport    = not na(supA) and (close - supA) < atr * 1.5
 nearResistance = not na(resA) and (resA - close) < atr * 1.5
